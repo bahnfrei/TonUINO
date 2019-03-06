@@ -44,6 +44,7 @@ This is my alternative firmware for the wonderful [TonUINO](https://www.voss.ear
 - **Optional:** WS281x status LED(s).
 - **Optional:** Low voltage shutdown i.e. for the [CubieKid PCB](https://www.thingiverse.com/thing:3148200).
 - **Optional:** [Pololu Power Switch (LV)](https://www.pololu.com/product/2808) support.
+- **Optional:** FM radio module (TEA5767) support
 
 ## Button Cheat Sheet
 

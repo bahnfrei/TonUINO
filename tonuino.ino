@@ -205,6 +205,34 @@
   10   19 00 00 00 - end track
   11   00 00 00 00
 
+  FM Radio - TEA5767:
+  ===================
+
+  This feature can be enabled by uncommenting the define TEA5767 below.
+
+  Connect TEA5767 fm radio module pins as follows:
+
+    SLC (radio) => A5 (Arduino)
+    SDA (radio) => A4 (Arduino)
+
+  To identify radio tags, a dedicated magic cookie (first 4 bytes) has to be
+  set accordingly. The version number (fifth byte) has to be set to 0x01.
+  Frequency is stored in bytes 6 and 7. All other bytes are cleared (set to 0x00).
+
+  13 37 70 01 01 5C 02 00 00 00 00 00 00 00 00 00
+  ----------- -- -- --
+       |      |  |  |
+       |      |  |  + frequency fractional
+       |      |  + frequency integer
+       |      + version (currently always 0x01)
+       + magic cookie to recognize that a card belongs to TonUINO
+
+  For those who need a short oneliner to convert radio station frequency to RFID data:
+
+    echo -n "Radio station frequency in MHz (e.g. 92.2): "; read -r freq; echo -n "Write the following data to your RFID card: "; printf "13 37 70 01 01 %0.2X %0.2X 00 00 00 00 00 00 00 00 00\n" ${freq%.*} ${freq#*.}
+
+  To create a special RFID tag that tunes in the next available station (search card), set frequency integer and fractional to 0. Search will start at 87 MHz, end at 108 MHz and wrap around, if the upper band limit is reached.
+
   additional non standard libraries used in this firmware:
   ========================================================
 
@@ -214,6 +242,7 @@
   IRremote.h - https://github.com/z3t0/Arduino-IRremote
   WS2812.h - https://github.com/cpldcpu/light_ws2812
   Vcc.h - https://github.com/Yveaux/Arduino_Vcc
+  TEA5767N.h - https://github.com/mroger/TEA5767
 */
 
 // uncomment the below line to enable five button support
@@ -236,6 +265,9 @@
 
 // uncomment the below line to flip the shutdown pin logic
 // #define POLOLUSWITCH
+
+// uncomment the below line to enable TEA5767 radio support
+// #define FMRADIO
 
 // include required libraries
 #include <avr/sleep.h>
@@ -262,6 +294,11 @@ using namespace ace_button;
 // include additional library if low voltage shutdown support is enabled
 #if defined LOWVOLTAGE
 #include <Vcc.h>
+#endif
+
+// include additional library if TEA5767 radio support is enabled
+#if defined(FMRADIO)
+#include <TEA5767N.h>
 #endif
 
 // playback modes
@@ -413,6 +450,14 @@ uint32_t preferenceCookie = 0;
 playbackStruct playback;
 preferenceStruct preference;
 
+// define radio RFID card cookie and variables for radio module and set default radio frequency
+const uint8_t magicCookieFMHex[4] = {0x13, 0x37, 0x70, 0x01};
+uint32_t      magicCookieFM       = 0;
+float         frequency           = 92.2f;
+byte          isBandLimitReached  = 1;
+bool          isRadioMute;
+bool          isRadioActive;
+
 // ################################################################################################################################################################
 // ############################################################### no configuration below this line ###############################################################
 // ################################################################################################################################################################
@@ -538,6 +583,10 @@ WS2812 rgbLed(statusLedCount);                                                //
 Vcc shutdownVoltage(shutdownVoltageCorrection);                               // create Vcc instance
 #endif
 
+#if defined(FMRADIO)
+TEA5767N radio = TEA5767N();                                                  // create radio instance
+#endif
+
 void setup() {
   // things we need to do immediately on startup
   pinMode(shutdownPin, OUTPUT);
@@ -554,12 +603,19 @@ void setup() {
   preferenceCookie += (uint32_t)magicCookieHex[3] << 16;
   preferenceCookie += (uint32_t)magicCookieHex[0] << 8;
   preferenceCookie += (uint32_t)magicCookieHex[1];
+#if defined(FMRADIO)
+  magicCookieFM = (uint32_t)magicCookieFMHex[0] << 24;
+  magicCookieFM += (uint32_t)magicCookieFMHex[1] << 16;
+  magicCookieFM += (uint32_t)magicCookieFMHex[2] << 8;
+  magicCookieFM += (uint32_t)magicCookieFMHex[3];
+#endif
 
   // start normal operation
   Serial.begin(debugConsoleSpeed);
   Serial.println(F("\n\nTonUINO JUKEBOX"));
   Serial.println(F("by Thorsten Voß"));
   Serial.println(F("Stephan Eisfeld"));
+  Serial.println(F("Michi"));
   Serial.println(F("and many others"));
   Serial.println(F("---------------"));
   Serial.println(F("flashed"));
@@ -654,6 +710,17 @@ void setup() {
   Serial.println(F("%)"));
 #endif
 
+#if defined(FMRADIO)
+  Serial.println(F("init radio"));
+  radio.mute();
+  radio.setStereoReception();
+  radio.setStereoNoiseCancellingOn();
+  radio.selectFrequency(frequency);
+  radio.setStandByOn();
+  isRadioMute=true;
+  isRadioActive=false;
+#endif
+
   // hold down all three buttons while powering up: erase the eeprom contents
   if (button0.isPressedRaw() && button1.isPressedRaw() && button2.isPressedRaw()) {
 #if defined PINCODE
@@ -728,6 +795,14 @@ void loop() {
       if (playback.currentTag.cookie == magicCookie) {
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
+
+#if defined(FMRADIO)
+        // if mp3 tag (default) has been identified, mute the radio and put the radio module in standby mode
+        radio.mute();
+        radio.setStandByOn();
+        isRadioMute=true;
+        isRadioActive=false;
+#endif
 
         randomSeed(micros());
 
@@ -810,6 +885,35 @@ void loop() {
       }
       // # end - nfc tag has our magic cookie on it
       // ##########################################
+
+#if defined(FMRADIO)
+      // #############################################################################
+      // # nfc tag has radio card magic cookie on it, use data from nfc tag to tune in
+      else if (nfcTag.magicCookie == magicCookieFM) {
+        switchButtonConfiguration(PLAY);
+        shutdownTimer(STOP);
+        mp3.stop();                                                             // stop mp3 playback
+        if (!isRadioMute) { radio.mute(); }                                     // mute radio while switching between stations to reduce noise
+        radio.setStandByOff();                                                  // wake-up radio module
+        frequency=(float)nfcTag.assignedFolder+(float)nfcTag.playbackMode/10;   // calculate frequency from RFID card data
+        if (frequency == 0) {                                                   // search next station if RFID card frequency is not set / set to 0 (search card)
+          Serial.print(F("radio station search in progress..."));
+          radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
+          isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
+          frequency = radio.readFrequencyInMHz();
+        } else {                                                                // select radio station based on the RFID card data (station card)
+          radio.selectFrequency(frequency);
+        }
+        delay(500);                                                             // wait until the signal is stable
+        radio.turnTheSoundBackOn();                                             // turn the sound on (unmute)
+        Serial.print(F("radio station selected: ")); Serial.print(frequency); Serial.println(F(" MHz"));
+        Serial.print(F("radio signal level    : ")); Serial.print(radio.getSignalLevel()); Serial.println(F("/15"));
+        isRadioMute=false;
+        isRadioActive=true;
+      }
+      // # end - nfc tag has radio card magic cookie on it
+      // #################################################
+#endif
 
       // #####################################################################################
       // # nfc tag does not have our magic cookie on it, start setup to configure this nfc tag
@@ -927,11 +1031,19 @@ void loop() {
   }
   // button 0 (middle) press or ir remote play+pause: toggle playback
   else if ((inputEvent == B0P && !playback.isLocked) || inputEvent == IRP) {
+#if defined(FMRADIO)
+    if (playback.isPlaying || (isRadioActive && !isRadioMute)) {
+#else
     if (playback.isPlaying) {
+#endif
       switchButtonConfiguration(PAUSE);
       shutdownTimer(START);
       Serial.println(F("pause"));
+#if defined(FMRADIO)
+      if (isRadioActive) { radio.mute(); isRadioMute=true; } else { mp3.pause(); }
+#else
       mp3.pause();
+#endif
       // if the current playback mode is story book mode: store the current progress
       if (playback.currentTag.mode == STORYBOOK) {
         Serial.print(F("save "));
@@ -940,11 +1052,19 @@ void loop() {
       }
     }
     else {
+#if defined(FMRADIO)
+      if (playback.playListMode || (isRadioActive && isRadioMute)) {
+#else
       if (playback.playListMode) {
+#endif
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
         Serial.println(F("play"));
+#if defined(FMRADIO)
+        if (isRadioActive) { radio.turnTheSoundBackOn(); isRadioMute=false; } else { mp3.start(); }
+#else
         mp3.start();
+#endif
       }
     }
   }
@@ -965,12 +1085,20 @@ void loop() {
     }
   }
   // button 1 (right) hold for 2 sec or button 5 press or ir remote right, only during (v)album, (v)party and story book mode while playing: next track
+#if defined(FMRADIO)
+  else if ((((inputEvent == B1H || inputEvent == B4P) && !playback.isLocked) || inputEvent == IRR) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying && !isRadioActive) {
+#else
   else if ((((inputEvent == B1H || inputEvent == B4P) && !playback.isLocked) || inputEvent == IRR) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying) {
+#endif
     Serial.println(F("next"));
     playNextTrack(0, true, true);
   }
   // button 2 (left) hold for 2 sec or button 4 press or ir remote left, only during (v)album, (v)party and story book mode while playing: previous track
+#if defined(FMRADIO)
+  else if ((((inputEvent == B2H || inputEvent == B3P) && !playback.isLocked) || inputEvent == IRL) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying && !isRadioActive) {
+#else
   else if ((((inputEvent == B2H || inputEvent == B3P) && !playback.isLocked) || inputEvent == IRL) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying) {
+#endif
     Serial.println(F("prev"));
     playNextTrack(0, false, true);
   }
@@ -991,7 +1119,11 @@ void loop() {
     }
   }
   // button 0 (middle) hold for 5 sec or ir remote menu, only during story book mode while playing: reset progress
+#if defined(FMRADIO)
+  else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && playback.currentTag.mode == STORYBOOK && playback.isPlaying && !isRadioActive) {
+#else
   else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && playback.currentTag.mode == STORYBOOK && playback.isPlaying) {
+#endif
     playback.playListItem = 1;
     Serial.print(F("reset "));
     printModeFolderTrack(true);
@@ -1002,7 +1134,11 @@ void loop() {
 #endif
   }
   // button 0 (middle) hold for 5 sec or ir remote menu while not playing: parents menu
+#if defined(FMRADIO)
+  else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && !playback.isPlaying && isRadioMute) {
+#else
   else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && !playback.isPlaying) {
+#endif
     parentsMenu();
     Serial.println(F("ready"));
   }
