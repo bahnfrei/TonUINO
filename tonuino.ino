@@ -913,6 +913,16 @@ void loop() {
           radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
           isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
           frequency = radio.readFrequencyInMHz();
+          mp3.playMp3FolderTrack(990);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack((int)frequency);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack(991);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack((int)(frequency*100-(int)frequency*100));
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack(992);
+          waitPlaybackToFinish(500);
         } else {                                                                // select radio station based on the RFID card data (station card)
           radio.selectFrequency(frequency);
         }
