@@ -64,3 +64,6 @@
 0965.mp3|30 Minuten.
 0966.mp3|60 Minuten.
 0967.mp3|Shutdown Timer deaktivieren.
+0990.mp3|Sender gefunden bei
+0991.mp3|Komma
+0992.mp3|Megahertz

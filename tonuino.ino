@@ -352,7 +352,7 @@ const uint16_t buttonLongLongPressDelay = 5000;     // longer long press delay f
 const uint32_t debugConsoleSpeed = 9600;            // speed for the debug console
 
 // number of mp3 files in advert folder + number of mp3 files in mp3 folder
-const uint16_t msgCount = 576;
+const uint16_t msgCount = 579;
 
 // define magic cookie (by default 0x13 0x37 0xb3 0x47)
 const uint8_t magicCookieHex[4] = {0x13, 0x37, 0xb3, 0x47};
@@ -903,6 +903,16 @@ void loop() {
           radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
           isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
           frequency = radio.readFrequencyInMHz();
+          mp3.playMp3FolderTrack(990);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack((int)frequency);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack(991);
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack((int)(frequency*100-(int)frequency*100));
+          waitPlaybackToFinish(500);
+          mp3.playMp3FolderTrack(992);
+          waitPlaybackToFinish(500);
         } else {                                                                // select radio station based on the RFID card data (station card)
           radio.selectFrequency(frequency);
         }

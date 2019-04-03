@@ -64,3 +64,6 @@
 0965.mp3|30 minutes.
 0966.mp3|60 minutes.
 0967.mp3|Deactivate shutdown timer.
+0990.mp3|Station found at
+0991.mp3|Point
+0992.mp3|Megahertz
