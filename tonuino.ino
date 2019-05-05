@@ -891,7 +891,7 @@ void loop() {
 #ifdef FMRADIO
       // #############################################################################
       // # nfc tag has radio card magic cookie on it, use data from nfc tag to tune in
-      else if (nfcTag.magicCookie == magicCookieFM) {
+      else if (nfcTag.cookie == magicCookieFM) {
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
         mp3.stop();                                                             // stop mp3 playback
