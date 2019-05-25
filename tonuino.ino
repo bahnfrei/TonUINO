@@ -901,13 +901,13 @@ void loop() {
 #ifdef FMRADIO
       // #############################################################################
       // # nfc tag has radio card magic cookie on it, use data from nfc tag to tune in
-      else if (nfcTag.cookie == magicCookieFM) {
+      else if (playback.currentTag.cookie == magicCookieFM) {
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
         mp3.stop();                                                             // stop mp3 playback
         if (!isRadioMute) { radio.mute(); }                                     // mute radio while switching between stations to reduce noise
         radio.setStandByOff();                                                  // wake-up radio module
-        frequency=(float)nfcTag.assignedFolder+(float)nfcTag.playbackMode/10;   // calculate frequency from RFID card data
+        frequency=(float)playback.currentTag.folder+(float)playback.currentTag.mode/10;   // calculate frequency from RFID card data
         if (frequency == 0) {                                                   // search next station if RFID card frequency is not set / set to 0 (search card)
           Serial.print(F("radio station search in progress..."));
           radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
