@@ -696,7 +696,7 @@ void setup() {
 
 #if defined LOWVOLTAGE
   Serial.println(F("init lvm"));
-  Serial.print(F("  ex-"));
+  Serial.print(F(" ex-"));
   Serial.print(shutdownMaxVoltage);
   Serial.print(F("V"));
   Serial.print(F(" wa-"));
@@ -749,7 +749,16 @@ void setup() {
 }
 
 void loop() {
+#if defined(FMRADIO)
+  if (isRadioActive && !isRadioMute) {
+    playback.isPlaying = 1;
+  }
+  else {
+    playback.isPlaying = !digitalRead(mp3BusyPin);
+  }
+#else
   playback.isPlaying = !digitalRead(mp3BusyPin);
+#endif
   checkForInput();
   shutdownTimer(CHECK);
 
@@ -757,6 +766,10 @@ void loop() {
   // if low voltage level is reached, store progress and shutdown
   if (shutdownVoltage.Read_Volts() <= shutdownMinVoltage) {
     if (playback.currentTag.mode == STORYBOOK) EEPROM.update(playback.currentTag.folder, playback.playList[playback.playListItem - 1]);
+    #if defined(FMRADIO)
+    radio.mute();
+    radio.setStandByOn();
+    #endif
     mp3.playMp3FolderTrack(808);
     waitPlaybackToFinish(255, 0, 0, 100);
     shutdownTimer(SHUTDOWN);
@@ -899,20 +912,20 @@ void loop() {
         radio.setStandByOff();                                                  // wake-up radio module
         frequency=(float)playback.currentTag.folder+(float)playback.currentTag.mode/10;   // calculate frequency from RFID card data
         if (frequency == 0) {                                                   // search next station if RFID card frequency is not set / set to 0 (search card)
-          Serial.print(F("radio station search in progress..."));
+          Serial.println(F("radio station search in progress..."));
           radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
           isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
           frequency = radio.readFrequencyInMHz();
           mp3.playMp3FolderTrack(990);
-          waitPlaybackToFinish(500);
+          waitPlaybackToFinish(0, 255, 0, 100);
           mp3.playMp3FolderTrack((int)frequency);
-          waitPlaybackToFinish(500);
+          waitPlaybackToFinish(0, 255, 0, 100);
           mp3.playMp3FolderTrack(991);
-          waitPlaybackToFinish(500);
+          waitPlaybackToFinish(0, 255, 0, 100);
           mp3.playMp3FolderTrack((int)(frequency*100-(int)frequency*100));
-          waitPlaybackToFinish(500);
+          waitPlaybackToFinish(0, 255, 0, 100);
           mp3.playMp3FolderTrack(992);
-          waitPlaybackToFinish(500);
+          waitPlaybackToFinish(0, 255, 0, 100);
         } else {                                                                // select radio station based on the RFID card data (station card)
           radio.selectFrequency(frequency);
         }
