@@ -208,7 +208,7 @@
   FM Radio - TEA5767:
   ===================
 
-  This feature can be enabled by uncommenting the define TEA5767 below.
+  This feature can be enabled by uncommenting the "define FMRADIO" below.
 
   Connect TEA5767 fm radio module pins as follows:
 
@@ -231,7 +231,12 @@
 
     echo -n "Radio station frequency in MHz (e.g. 92.2): "; read -r freq; echo -n "Write the following data to your RFID card: "; printf "13 37 70 01 01 %0.2X %0.2X 00 00 00 00 00 00 00 00 00\n" ${freq%.*} ${freq#*.}
 
-  To create a special RFID tag that tunes in the next available station (search card), set frequency integer and fractional to 0. Search will start at 87 MHz, end at 108 MHz and wrap around, if the upper band limit is reached.
+  To create a special RFID tag that tunes in the next available station (search card),
+  set frequency integer and fractional to 0. Search will start at 87 MHz, end at 108 MHz
+  and wrap around, if the upper band limit is reached.
+
+  It's also possible to switch between stations using previous/next buttons,
+  while the radio is active and playing/unmuted.
 
   additional non standard libraries used in this firmware:
   ========================================================
@@ -450,14 +455,14 @@ uint32_t preferenceCookie = 0;
 playbackStruct playback;
 preferenceStruct preference;
 
-// define radio RFID card cookie and variables for radio module and set default radio frequency
 #if defined FMRADIO
-const uint8_t magicCookieFMHex[4] = {0x13, 0x37, 0x70, 0x01};
-uint32_t      magicCookieFM       = 0;
-float         frequency           = 92.2f;
-byte          isBandLimitReached  = 1;
-bool          isRadioMute;
-bool          isRadioActive;
+// config options for radio tune() function
+enum{UP,DOWN,NONE,SHORT,LONG};
+// configure radio station announce message level:
+//   NONE
+//   SHORT (frequency only)
+//   LONG (a complete sentence including frequency ;-)
+uint8_t radioStationMsg = NONE;
 #endif
 
 // ################################################################################################################################################################
@@ -586,7 +591,88 @@ Vcc shutdownVoltage(shutdownVoltageCorrection);                               //
 #endif
 
 #if defined FMRADIO
-TEA5767N radio = TEA5767N();                                                  // create radio instance
+// wrapper class for radio module functions
+class Radio {
+  private:
+    const uint8_t magicCookieFMHex[4] = {0x13, 0x37, 0x70, 0x01};
+    byte          isBandLimitReached  = 1;
+    TEA5767N      radio;                                                      // create radio module instance
+
+  public:
+    uint32_t      magicCookieFM       = 0;
+
+    Radio() {};
+
+    // initialize radio, transform magicCookie
+    void setup() {
+      magicCookieFM = (uint32_t)magicCookieFMHex[0] << 24;
+      magicCookieFM += (uint32_t)magicCookieFMHex[1] << 16;
+      magicCookieFM += (uint32_t)magicCookieFMHex[2] << 8;
+      magicCookieFM += (uint32_t)magicCookieFMHex[3];
+      Serial.println(F("init radio"));
+      mute();
+      radio.setStereoReception();                                             // enable stereo reception
+      radio.setStereoNoiseCancellingOn();                                     // enable stereo noise reduction, SDS (switch to mono on weak signal)
+      radio.setHighCutControlOn();                                            // enable high cut control, HCC (cut high frequencies on weak signal)
+      radio.setSoftMuteOn();                                                  // enable softmute (attenuate inter-station noise on weak signal)
+      radio.setSearchHighStopLevel();                                         // set ADC output/reception level=10 (prefer strong signals/stations)
+      standby();
+    }
+
+    // helpers
+    void mute() { radio.mute(); }
+    void unmute() { radio.turnTheSoundBackOn(); }
+    void standby() { radio.setStandByOn(); }
+    void active() { radio.setStandByOff(); }
+    void off() { mute(); standby(); }
+    boolean isActive() { return !radio.isStandBy(); }
+    boolean isMute() { return radio.isMuted(); }
+
+    // tune station depending on the specified frequency or search direction and
+    // announce radio station frequency in search mode according to the specified msg level
+    // freq = radio station frequency (type float)
+    // dir  = station search direction: UP / DOWN
+    // msg  = station announcement level: NONE / SHORT / LONG
+    void tune(float freq, uint8_t dir, uint8_t msg) {
+      mute();                                                                 // mute the radio while switching between stations to reduce noise
+      active();                                                               // wake-up radio module
+      if (freq == 0) {                                                        // search next station if frequency is not set / set to 0 (search card, prev/next button pressed)
+        Serial.println(F("radio station search..."));
+        if (dir == UP) {                                                      // search direction UP
+          radio.setSearchUp();
+          isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
+        }
+        if (dir == DOWN) {                                                    // search direction DOWN
+          radio.setSearchDown();
+          isBandLimitReached ? isBandLimitReached = radio.startsSearchFromEnd() : isBandLimitReached = radio.searchNext();
+        }
+        freq = radio.readFrequencyInMHz();
+        if (msg == LONG) {                                                    // message/announcement level LONG
+          mp3.playMp3FolderTrack(990);
+          waitPlaybackToFinish(0, 255, 0, 100);
+        }
+        if (msg == LONG || msg == SHORT) {                                    // message/announcement level LONG or SHORT
+          mp3.playMp3FolderTrack((int)freq);
+          waitPlaybackToFinish(0, 255, 0, 100);
+          mp3.playMp3FolderTrack(991);
+          waitPlaybackToFinish(0, 255, 0, 100);
+          mp3.playMp3FolderTrack((int)(freq*100-(int)freq*100));
+          waitPlaybackToFinish(0, 255, 0, 100);
+        }
+        if (msg == LONG) {                                                    // message/announcement level LONG
+          mp3.playMp3FolderTrack(992);
+          waitPlaybackToFinish(0, 255, 0, 100);
+        }
+      } else {                                                                // select radio station based on the given frequency (station card)
+        radio.selectFrequency(freq);
+      }
+      delay(500);                                                             // wait until the signal is stable
+      unmute();                                                               // turn the sound on (unmute)
+      Serial.print(F("radio station (f): ")); Serial.print(freq); Serial.println(F(" MHz"));
+      Serial.print(F("radio station lvl: ")); Serial.print(radio.getSignalLevel()); Serial.println(F("/15"));
+    }
+};
+Radio radio;                                                                  // create radio instance
 #endif
 
 void setup() {
@@ -605,12 +691,6 @@ void setup() {
   preferenceCookie += (uint32_t)magicCookieHex[3] << 16;
   preferenceCookie += (uint32_t)magicCookieHex[0] << 8;
   preferenceCookie += (uint32_t)magicCookieHex[1];
-#if defined FMRADIO
-  magicCookieFM = (uint32_t)magicCookieFMHex[0] << 24;
-  magicCookieFM += (uint32_t)magicCookieFMHex[1] << 16;
-  magicCookieFM += (uint32_t)magicCookieFMHex[2] << 8;
-  magicCookieFM += (uint32_t)magicCookieFMHex[3];
-#endif
 
   // start normal operation
   Serial.begin(debugConsoleSpeed);
@@ -713,14 +793,7 @@ void setup() {
 #endif
 
 #if defined FMRADIO
-  Serial.println(F("init radio"));
-  radio.mute();
-  radio.setStereoReception();
-  radio.setStereoNoiseCancellingOn();
-  radio.selectFrequency(frequency);
-  radio.setStandByOn();
-  isRadioMute=true;
-  isRadioActive=false;
+  radio.setup();
 #endif
 
   // hold down all three buttons while powering up: erase the eeprom contents
@@ -750,7 +823,7 @@ void setup() {
 
 void loop() {
 #if defined(FMRADIO)
-  if (isRadioActive && !isRadioMute) {
+  if (radio.isActive() && !radio.isMute()) {
     playback.isPlaying = 1;
   }
   else {
@@ -766,10 +839,6 @@ void loop() {
   // if low voltage level is reached, store progress and shutdown
   if (shutdownVoltage.Read_Volts() <= shutdownMinVoltage) {
     if (playback.currentTag.mode == STORYBOOK) EEPROM.update(playback.currentTag.folder, playback.playList[playback.playListItem - 1]);
-    #if defined(FMRADIO)
-    radio.mute();
-    radio.setStandByOn();
-    #endif
     mp3.playMp3FolderTrack(808);
     waitPlaybackToFinish(255, 0, 0, 100);
     shutdownTimer(SHUTDOWN);
@@ -812,11 +881,8 @@ void loop() {
         shutdownTimer(STOP);
 
 #if defined FMRADIO
-        // if mp3 tag (default) has been identified, mute the radio and put the radio module in standby mode
-        radio.mute();
-        radio.setStandByOn();
-        isRadioMute=true;
-        isRadioActive=false;
+        // if mp3 tag (default) has been identified, turn the radio off (mute and standby)
+        radio.off();
 #endif
 
         randomSeed(micros());
@@ -904,37 +970,13 @@ void loop() {
 #if defined FMRADIO
       // #############################################################################
       // # nfc tag has radio card magic cookie on it, use data from nfc tag to tune in
-      else if (playback.currentTag.cookie == magicCookieFM) {
+      else if (playback.currentTag.cookie == radio.magicCookieFM) {
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
-        mp3.stop();                                                             // stop mp3 playback
-        if (!isRadioMute) { radio.mute(); }                                     // mute radio while switching between stations to reduce noise
-        radio.setStandByOff();                                                  // wake-up radio module
-        frequency=(float)playback.currentTag.folder+(float)playback.currentTag.mode/10;   // calculate frequency from RFID card data
-        if (frequency == 0) {                                                   // search next station if RFID card frequency is not set / set to 0 (search card)
-          Serial.println(F("radio station search in progress..."));
-          radio.setSearchHighStopLevel();                                       // ADC output/reception level=10
-          isBandLimitReached ? isBandLimitReached = radio.startsSearchFromBeginning() : isBandLimitReached = radio.searchNext();
-          frequency = radio.readFrequencyInMHz();
-          mp3.playMp3FolderTrack(990);
-          waitPlaybackToFinish(0, 255, 0, 100);
-          mp3.playMp3FolderTrack((int)frequency);
-          waitPlaybackToFinish(0, 255, 0, 100);
-          mp3.playMp3FolderTrack(991);
-          waitPlaybackToFinish(0, 255, 0, 100);
-          mp3.playMp3FolderTrack((int)(frequency*100-(int)frequency*100));
-          waitPlaybackToFinish(0, 255, 0, 100);
-          mp3.playMp3FolderTrack(992);
-          waitPlaybackToFinish(0, 255, 0, 100);
-        } else {                                                                // select radio station based on the RFID card data (station card)
-          radio.selectFrequency(frequency);
-        }
-        delay(500);                                                             // wait until the signal is stable
-        radio.turnTheSoundBackOn();                                             // turn the sound on (unmute)
-        Serial.print(F("radio station selected: ")); Serial.print(frequency); Serial.println(F(" MHz"));
-        Serial.print(F("radio signal level    : ")); Serial.print(radio.getSignalLevel()); Serial.println(F("/15"));
-        isRadioMute=false;
-        isRadioActive=true;
+        // stop mp3 playback
+        mp3.stop();
+        // calculate frequency from RFID card data and tune in...
+        radio.tune((float)playback.currentTag.folder+(float)playback.currentTag.mode/10, UP, radioStationMsg);
       }
       // # end - nfc tag has radio card magic cookie on it
       // #################################################
@@ -1056,19 +1098,15 @@ void loop() {
   }
   // button 0 (middle) press or ir remote play+pause: toggle playback
   else if ((inputEvent == B0P && !playback.isLocked) || inputEvent == IRP) {
-#if defined FMRADIO
-    if (playback.isPlaying || (isRadioActive && !isRadioMute)) {
-#else
     if (playback.isPlaying) {
+#if defined FMRADIO
+      if (radio.isActive()) { radio.mute(); } else { mp3.pause(); }
+#else
+      mp3.pause();
 #endif
       switchButtonConfiguration(PAUSE);
       shutdownTimer(START);
       Serial.println(F("pause"));
-#if defined FMRADIO
-      if (isRadioActive) { radio.mute(); isRadioMute=true; } else { mp3.pause(); }
-#else
-      mp3.pause();
-#endif
       // if the current playback mode is story book mode: store the current progress
       if (playback.currentTag.mode == STORYBOOK) {
         Serial.print(F("save "));
@@ -1078,18 +1116,15 @@ void loop() {
     }
     else {
 #if defined FMRADIO
-      if (playback.playListMode || (isRadioActive && isRadioMute)) {
+      if (playback.playListMode || (radio.isActive() && radio.isMute())) {
+        if (radio.isActive()) { radio.unmute(); } else { mp3.start(); }
 #else
       if (playback.playListMode) {
+        mp3.start();
 #endif
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
         Serial.println(F("play"));
-#if defined FMRADIO
-        if (isRadioActive) { radio.turnTheSoundBackOn(); isRadioMute=false; } else { mp3.start(); }
-#else
-        mp3.start();
-#endif
       }
     }
   }
@@ -1111,24 +1146,32 @@ void loop() {
   }
   // button 1 (right) hold for 2 sec or button 5 press or ir remote right, only during (v)album, (v)party and story book mode while playing: next track
 #if defined FMRADIO
-  else if ((((inputEvent == B1H || inputEvent == B4P) && !playback.isLocked) || inputEvent == IRR) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying && !isRadioActive) {
+  else if ((((inputEvent == B1H || inputEvent == B4P) && !playback.isLocked) || inputEvent == IRR) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY || radio.isActive()) && playback.isPlaying) {
+    Serial.println(F("next"));
+    if (radio.isActive()) { radio.tune(0, UP, radioStationMsg); } else { playNextTrack(0, true, true); };
 #else
   else if ((((inputEvent == B1H || inputEvent == B4P) && !playback.isLocked) || inputEvent == IRR) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying) {
-#endif
     Serial.println(F("next"));
     playNextTrack(0, true, true);
+#endif
   }
   // button 2 (left) hold for 2 sec or button 4 press or ir remote left, only during (v)album, (v)party and story book mode while playing: previous track
 #if defined FMRADIO
-  else if ((((inputEvent == B2H || inputEvent == B3P) && !playback.isLocked) || inputEvent == IRL) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying && !isRadioActive) {
+  else if ((((inputEvent == B2H || inputEvent == B3P) && !playback.isLocked) || inputEvent == IRL) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY || radio.isActive()) && playback.isPlaying) {
+    Serial.println(F("prev"));
+    if (radio.isActive()) { radio.tune(0, DOWN, radioStationMsg); } else { playNextTrack(0, false, true); };
 #else
   else if ((((inputEvent == B2H || inputEvent == B3P) && !playback.isLocked) || inputEvent == IRL) && (playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == STORYBOOK || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying) {
-#endif
     Serial.println(F("prev"));
     playNextTrack(0, false, true);
+#endif
   }
   // button 0 (middle) hold for 5 sec or ir remote menu, only during (v)story, (v)album, (v)party and single mode while playing: toggle single track repeat
+#if defined FMRADIO
+  else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && (playback.currentTag.mode == STORY || playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == SINGLE || playback.currentTag.mode == VSTORY || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying && !radio.isActive()) {
+#else
   else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && (playback.currentTag.mode == STORY || playback.currentTag.mode == ALBUM || playback.currentTag.mode == PARTY || playback.currentTag.mode == SINGLE || playback.currentTag.mode == VSTORY || playback.currentTag.mode == VALBUM || playback.currentTag.mode == VPARTY) && playback.isPlaying) {
+#endif
     Serial.print(F("repeat "));
     if ((playback.isRepeat = !playback.isRepeat)) {
       Serial.println(F("on"));
@@ -1144,11 +1187,7 @@ void loop() {
     }
   }
   // button 0 (middle) hold for 5 sec or ir remote menu, only during story book mode while playing: reset progress
-#if defined FMRADIO
-  else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && playback.currentTag.mode == STORYBOOK && playback.isPlaying && !isRadioActive) {
-#else
   else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && playback.currentTag.mode == STORYBOOK && playback.isPlaying) {
-#endif
     playback.playListItem = 1;
     Serial.print(F("reset "));
     printModeFolderTrack(true);
@@ -1159,11 +1198,7 @@ void loop() {
 #endif
   }
   // button 0 (middle) hold for 5 sec or ir remote menu while not playing: parents menu
-#if defined FMRADIO
-  else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && !playback.isPlaying && isRadioMute) {
-#else
   else if (((inputEvent == B0H && !playback.isLocked) || inputEvent == IRM) && !playback.isPlaying) {
-#endif
     parentsMenu();
     Serial.println(F("ready"));
   }
@@ -1785,6 +1820,9 @@ void shutdownTimer(uint8_t timerAction) {
         mfrc522.PCD_AntennaOff();
         mfrc522.PCD_SoftPowerDown();
         mp3.sleep();
+#if defined FMRADIO
+        radio.off();
+#endif
         set_sleep_mode(SLEEP_MODE_PWR_DOWN);
         cli();
         sleep_mode();
