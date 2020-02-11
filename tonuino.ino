@@ -606,6 +606,7 @@ class Radio {
   private:
     const uint8_t magicCookieFMHex[4] = {0x13, 0x37, 0x70, 0x01};
     byte          isBandLimitReached  = 1;
+    bool          _mute, _active;
     TEA5767N      radio;                                                      // create radio module instance
 
   public:
@@ -630,13 +631,13 @@ class Radio {
     }
 
     // helpers
-    void mute() { radio.mute(); }
-    void unmute() { radio.turnTheSoundBackOn(); }
-    void standby() { radio.setStandByOn(); }
-    void active() { radio.setStandByOff(); }
+    void mute() { radio.mute(); _mute=true; }
+    void unmute() { radio.turnTheSoundBackOn(); _mute=false; }
+    void standby() { radio.setStandByOn(); _active=false; }
+    void active() { radio.setStandByOff(); _active=true; }
     void off() { mute(); standby(); }
-    boolean isActive() { return !radio.isStandBy(); }
-    boolean isMute() { return radio.isMuted(); }
+    bool isActive() { return _active; }
+    bool isMute() { return _mute; }
 
     // tune station depending on the specified frequency or search direction and
     // announce radio station frequency in search mode according to the specified msg level
