@@ -982,6 +982,7 @@ void loop() {
       // #############################################################################
       // # nfc tag has radio card magic cookie on it, use data from nfc tag to tune in
       else if (playback.currentTag.cookie == radio.magicCookieFM) {
+        playback.playListMode = true;
         switchButtonConfiguration(PLAY);
         shutdownTimer(STOP);
         // stop mp3 playback
@@ -1126,11 +1127,10 @@ void loop() {
       }
     }
     else {
+      if (playback.playListMode) {
 #if defined FMRADIO
-      if (playback.playListMode || (radio.isActive() && radio.isMute())) {
         if (radio.isActive()) { radio.unmute(); } else { mp3.start(); }
 #else
-      if (playback.playListMode) {
         mp3.start();
 #endif
         switchButtonConfiguration(PLAY);
